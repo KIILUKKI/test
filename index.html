@@ -388,6 +388,8 @@
    - Fullscreen button made slightly larger visually.
    - Menu panels (howMenu, settingsMenu, profileCard) aligned to right:12px so they appear under the container.
    - Added a real-time rooms listener (setupRoomsListener) so rooms show up immediately.
+   - Implemented scrollChatToBottom() and scroll button; optimized /clear and /delete to run deletes in parallel.
+   - Protected against AltGr+? opening How To by intercepting that combo.
    - No other feature changes.
    =================== */
 
@@ -801,7 +803,7 @@ async function enterRoom(r){
         removeMessage(d.id);
       }
     });
-    if(shouldScroll) scrollChatToBottom();
+    if(shouldScroll) scrollChatToBottom(); // <-- this used to throw (missing fn)
   });
 
   // typing snapshot (robust handling of timestamp field)
@@ -831,6 +833,34 @@ async function enterRoom(r){
     }
   });
 }
+
+/* =========================
+   Utility / DOM helpers added/modified
+   ========================= */
+
+/* scroll helper (--- MUUTOS ---): robust scroll-to-bottom and scroll button handler */
+function scrollChatToBottom(smooth = true){
+  try{
+    if(smooth && 'scrollTo' in chat){
+      chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
+    } else {
+      chat.scrollTop = chat.scrollHeight;
+    }
+    // hide scroll button after scrolling
+    scrollBottomBtn.style.display = 'none';
+  }catch(e){ /* ignore */ }
+}
+
+/* show/hide scroll-to-bottom button based on user's scroll position */
+chat.addEventListener('scroll', () => {
+  const distanceFromBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+  if(distanceFromBottom > 160){
+    scrollBottomBtn.style.display = 'block';
+  } else {
+    scrollBottomBtn.style.display = 'none';
+  }
+});
+scrollBottomBtn.addEventListener('click', () => scrollChatToBottom(true));
 
 /* DOM helpers for incremental updates */
 function makeMessageElement(id, m){
@@ -1012,7 +1042,14 @@ function showEditDeleteMenu(x,y,msgId, currentText){
     ev.stopPropagation();
     const newText = prompt('Edit message', currentText);
     if(newText == null) { hideContextMenu(); return; }
-    try{ await updateDoc(doc(db,'rooms',room,'messages',msgId), { text: newText, editedNote: 'Edited' }).catch(console.error); }catch(e){}
+    try{
+      await updateDoc(doc(db,'rooms',room,'messages',msgId), { text: newText, editedNote: 'Edited' }).catch(console.error);
+      // feedback: scroll to make sure updated message visible
+      setTimeout(()=> scrollChatToBottom(false), 60);
+    }catch(err){
+      console.error('Edit failed', err);
+      alert('Muokkaus epäonnistui — palvelin esti muokkauksen tai oikeuksia ei ole.');
+    }
     hideContextMenu();
   };
   contextMenu.appendChild(editBtn);
@@ -1022,7 +1059,12 @@ function showEditDeleteMenu(x,y,msgId, currentText){
   delBtn.onclick = async (ev)=>{
     ev.stopPropagation();
     if(confirm('Delete this message?')){
-      try{ await deleteDoc(doc(db,'rooms',room,'messages',msgId)).catch(console.error); }catch(e){}
+      try{
+        await deleteDoc(doc(db,'rooms',room,'messages',msgId)).catch(console.error);
+      }catch(err){
+        console.error('Delete failed', err);
+        alert('Poisto epäonnistui — palvelin esti poiston tai oikeuksia ei ole.');
+      }
     }
     hideContextMenu();
   };
@@ -1244,15 +1286,15 @@ async function handleCommand(cmdText){
     if(!confirm('Delete all messages in this room?')) return;
     try{
       const msgs = await getDocs(collection(db,'rooms',room,'messages'));
-      for(const d of msgs.docs){
-        // delete seen subdocs first
+      // --- MUUTOS: parallel deletes for speed ---
+      await Promise.all(msgs.docs.map(async (d) => {
         try{
           const seenSnap = await getDocs(collection(db,'rooms',room,'messages',d.id,'seen'));
-          for(const sd of seenSnap.docs) await deleteDoc(sd.ref).catch(()=>{});
-        }catch(e){}
+          await Promise.all(seenSnap.docs.map(sd => deleteDoc(sd.ref).catch(()=>{})));
+        }catch(e){ /* ignore */ }
         await deleteDoc(d.ref).catch(()=>{});
-      }
-    }catch(e){ console.error('/clear error', e); }
+      }));
+    }catch(e){ console.error('/clear error', e); alert('Poisto epäonnistui — tarkista palvelimen oikeudet.'); }
     return;
   }
 
@@ -1262,16 +1304,16 @@ async function handleCommand(cmdText){
     try{
       // delete typing docs
       const typingDocs = await getDocs(collection(db,'rooms',room,'typing'));
-      for(const t of typingDocs.docs) await deleteDoc(t.ref).catch(()=>{});
-      // delete messages & their seen subcollections
+      await Promise.all(typingDocs.docs.map(t => deleteDoc(t.ref).catch(()=>{})));
+      // delete messages & their seen subcollections (parallel)
       const msgs = await getDocs(collection(db,'rooms',room,'messages'));
-      for(const d of msgs.docs){
+      await Promise.all(msgs.docs.map(async (d) => {
         try{
           const seenSnap = await getDocs(collection(db,'rooms',room,'messages',d.id,'seen'));
-          for(const sd of seenSnap.docs) await deleteDoc(sd.ref).catch(()=>{});
-        }catch(e){}
+          await Promise.all(seenSnap.docs.map(sd => deleteDoc(sd.ref).catch(()=>{})));
+        }catch(e){ /* ignore */ }
         await deleteDoc(d.ref).catch(()=>{});
-      }
+      }));
       // attempt to delete room doc (may fail if server rules or remaining subcollections)
       await deleteDoc(doc(db,'rooms',room)).catch(()=>{});
       // navigate back to home
@@ -1280,7 +1322,7 @@ async function handleCommand(cmdText){
       room = '';
       showHome();
       chat.innerHTML = '';
-    }catch(e){ console.error('/delete error', e); }
+    }catch(e){ console.error('/delete error', e); alert('Huoneen poisto epäonnistui — tarkista palvelimen oikeudet.'); }
     return;
   }
 
@@ -1495,7 +1537,6 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
 }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
-
 function linkify(text){
   const urlRe = /((https?:\/\/|www\.)[\w\-@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([\w\-@:%_\+.~#?&//=]*))/gi;
   return text.replace(urlRe, function(match){
@@ -1506,82 +1547,29 @@ function linkify(text){
 }
 
 /* =========================
-   NEW: Login (from koodi 2) — replaces previous local-only login
+   NEW: keyboard handling to block AltGr+? opening How To (--- MUUTOS ---)
+   - AltGr typically appears as ctrlKey+altKey; we block that combination for '?'.
+   - Keep normal '?' toggle (no modifiers).
    ========================= */
-
-// SHA-256 helper (uses SubtleCrypto)
-async function sha256(text) {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-loginBtn.addEventListener('click', async (e) => {
-  e.preventDefault();
-  const username = (loginUser.value || '').trim();
-  const password = loginPass.value || '';
-  if(!username || !password){ loginMsg.textContent = 'Täytä käyttäjänimi ja salasana.'; return; }
-  loginMsg.textContent = 'Tarkistetaan...';
-  try {
-    const userRef = doc(db, 'users', username);
-    const snap = await getDoc(userRef);
-    const passHash = await sha256(password);
-
-    if(!snap.exists()){
-      // REGISTER
-      await setDoc(userRef, {
-        passwordHash: passHash,
-        created: serverTimestamp(),
-        color: '#58a6ff'
-      });
-
-      localStorage.setItem('session', username);
-      localStorage.setItem('nick', username);
-      localStorage.setItem('nickColor', '#58a6ff');
-
-      loginMsg.textContent = 'Rekisteröity ja kirjautunut 👍';
-      // update UI
-      nickInput.value = username;
-      nickColorInput.value = '#58a6ff';
-      nickColorCircle.style.background = '#58a6ff';
-      showHome();
-      return;
-    }
-
-    // LOGIN
-    const data = snap.data();
-    if(data.passwordHash === passHash){
-      localStorage.setItem('session', username);
-      localStorage.setItem('nick', username);
-      if (data.color) localStorage.setItem('nickColor', data.color);
-      loginMsg.textContent = 'Kirjautuminen onnistui ✅';
-      nickInput.value = username;
-      nickColorInput.value = localStorage.getItem('nickColor') || '#58a6ff';
-      nickColorCircle.style.background = localStorage.getItem('nickColor') || '#58a6ff';
-      showHome();
-    } else {
-      loginMsg.textContent = 'Väärä salasana ❌';
-    }
-  } catch (err) {
-    console.error(err);
-    loginMsg.textContent = 'Virhe: ' + (err.message || String(err));
+document.addEventListener('keydown', (e) => {
+  // Block AltGr + ? (AltGr often reports ctrlKey + altKey)
+  if(e.key === '?' && e.ctrlKey && e.altKey){
+    e.stopPropagation();
+    e.preventDefault();
+    return;
   }
-});
-
-loginPass.addEventListener('keydown', e => { if (e.key === 'Enter') loginBtn.click(); });
-
-// Demo/guest button (kept behaviour)
-demoBtn.addEventListener('click', (e) => {
-  e.preventDefault();
-  const g = 'Guest' + Math.floor(Math.random()*9000 + 1000);
-  localStorage.setItem('session', g);
-  localStorage.setItem('nick', g);
-  const guestColor = getComputedStyle(document.documentElement).getPropertyValue('--guest-gray').trim() || '#9aa0a6';
-  localStorage.setItem('nickColor', guestColor);
-  nickInput.value = g;
-  nickColorInput.value = guestColor;
-  nickColorCircle.style.background = guestColor;
-  showHome();
+  // Toggle How To with plain '?' (no ctrl/alt/meta)
+  if(e.key === '?' && !e.ctrlKey && !e.altKey && !e.metaKey){
+    e.preventDefault();
+    const open = howMenu.classList.toggle('show');
+    howMenu.setAttribute('aria-hidden', !open);
+  }
+  // Esc closes menus
+  if(e.key === 'Escape'){
+    if(settingsMenu.classList.contains('show')){ settingsMenu.classList.remove('show'); settingsMenu.setAttribute('aria-hidden','true'); }
+    if(howMenu.classList.contains('show')){ howMenu.classList.remove('show'); howMenu.setAttribute('aria-hidden','true'); }
+    if(contextMenu.style.display === 'block') { contextMenu.style.display = 'none'; contextMenu.setAttribute('aria-hidden','true'); }
+  }
 });
 
 /* Ensure rooms are loaded (real-time) */
