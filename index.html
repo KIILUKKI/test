@@ -124,7 +124,7 @@
 #chatSidebar.collapsed{width:40px;padding:6px}
 #chatWrapperMain{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
 #chat{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,transparent, rgba(255,255,255,0.01));transition:padding-bottom 120ms ease}
-.message{display:flex;gap:10px;align-items:flex-start}
+.message{display:flex;gap:10px;align-items:flex-start;transition:transform 160ms ease}
 .avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000}
 /* Reserve horizontal space on the right for action buttons (reply & more) so they don't overlap message text */
 .msg{background:var(--panel);padding:10px 96px 10px 14px;border-radius:12px;position:relative;max-width:70%}
@@ -254,7 +254,7 @@
     <div class="section"><b>Mobile specifics</b><br>
       • Drawer: swipe from the left edge or use the blue button to open the room drawer.<br>
       • On-screen keyboard: input and reply box move to stay visible; the chat will auto-scroll when appropriate.<br>
-      • Swipe-to-reply moves only avatar/action icons; message text stays fixed to avoid overlap.</div>
+      • Swipe-to-reply now moves the *entire message element* so the reply gesture feels direct and intuitive.</div>
 
     <div class="section"><b>Desktop specifics</b><br>
       • Lobby and chat sidebar remain visible; three-dot menus are available for edits.<br>
@@ -383,12 +383,11 @@
 
 <script type="module">
 /* ===================
-   Minimal, targeted changes applied:
-   - Added writeBatch import for fast batch deletes.
-   - Implemented scrollChatToBottom() and used requestAnimationFrame to make autoscroll robust.
-   - Replaced sequential deletes in /clear and /delete with chunked batch deletes.
-   - Added global keydown handler so '?' opens How To only when Alt/Ctrl/Meta are NOT pressed (fixes AltGr+? issue).
-   - Everything else left intact.
+   Minimal, targeted changes applied for mobile swipe behavior:
+   - On mobile, the whole .message element translates X on swipe (not only avatar/buttons).
+   - On mobile we DO NOT render the reply button nor the three-dots button.
+   - Long-press for edit/delete is preserved (for own messages).
+   Everything else left intact.
    =================== */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
@@ -844,21 +843,33 @@ function makeMessageElement(id, m){
   const safeTextHtml = linkify(escapeHtml(m.text || ''));
   const editedNoteHtml = m.editedNote ? `<span class="edited-note">${escapeHtml(m.editedNote)}</span>` : '';
 
-  el.innerHTML = `
+  // Build inner message WITHOUT reply button when mobile.
+  let msgInner = `
     <div class="avatar" style="background:${m.color || getComputedStyle(document.documentElement).getPropertyValue('--guest-gray').trim()}">${escapeHtml((m.name||'?')[0]||'?')}</div>
     <div class="msg">
       ${replyHtml}
       <b class="msg-sender" style="color:${m.color || '#999'};cursor:pointer">${escapeHtml(m.name)}</b>
       <span class="time">${m.time?.toMillis ? new Date(m.time.toMillis()).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : ''}</span>
       <div class="msg-text">${safeTextHtml}${editedNoteHtml}</div>
-      <div class="reply-btn" data-name="${escapeAttr(m.name)}" data-text="${escapeAttr(m.text)}">reply</div>
     </div>
   `;
+
+  el.innerHTML = msgInner;
+
+  // Add reply button ONLY for non-mobile (desktop)
+  if(!isMobile){
+    const replyBtn = document.createElement('div');
+    replyBtn.className = 'reply-btn';
+    replyBtn.setAttribute('data-name', escapeAttr(m.name));
+    replyBtn.setAttribute('data-text', escapeAttr(m.text));
+    replyBtn.textContent = 'reply';
+    el.querySelector('.msg').appendChild(replyBtn);
+  }
 
   // Add the three-dot MORE button for own messages (desktop only)
   const localNick = localStorage.getItem('nick') || nick;
   if(m.name === localNick && !isMobile){
-    const msgInner = el.querySelector('.msg');
+    const msgInnerEl = el.querySelector('.msg');
     const moreBtn = document.createElement('div');
     moreBtn.className = 'more-btn';
     moreBtn.title = 'More';
@@ -869,7 +880,7 @@ function makeMessageElement(id, m){
       // show the same context menu but positioned near the button
       showEditDeleteMenu(Math.round(rect.left + 8), Math.round(rect.bottom + 6), id, m.text);
     });
-    msgInner.appendChild(moreBtn);
+    msgInnerEl.appendChild(moreBtn);
   }
 
   // attach interactions
@@ -940,7 +951,7 @@ function makeMessageElement(id, m){
   // attach mobile interactions including swipe-to-reply and long-press edit/delete
   attachMobileInteractions(el, id, m);
 
-  // reply button
+  // reply button click handler (desktop only)
   el.querySelectorAll('.reply-btn').forEach(b => b.addEventListener('click', (e)=>{
     replyTo = { name: b.dataset.name, text: b.dataset.text };
     replyBox.style.display = 'block';
@@ -1048,58 +1059,52 @@ function hideContextMenu(){
 }
 
 /* mobile interactions: long-press -> edit/delete for own; smooth swipe right -> reply
-   IMPORTANT: text (msg-text) does NOT move on X-axis.
-   We only translate avatar and action buttons so the visible content stays fixed.
-   Long-press now opens the same Edit/Delete menu (at touch coords).
+   CHANGE: Move the ENTIRE .message element on mobile swipe (so the whole message translates).
+   Long-press still opens Edit/Delete for own messages.
 */
 function attachMobileInteractions(el, msgId, messageData){
   let longPressTimer = null;
   let touchStartX = 0;
   let touchStartY = 0;
-  let dragging = false;
-
-  // elements to move (leave text in .msg-text untouched)
-  const avatarEl = () => el.querySelector('.avatar');
-  const moreBtnEl = () => el.querySelector('.more-btn');
-  const replyBtnEl = () => el.querySelector('.reply-btn');
+  let draggingLocal = false;
 
   el.addEventListener('touchstart', (e)=>{
     const t = e.touches[0];
     touchStartX = t.clientX; touchStartY = t.clientY;
+    draggingLocal = false;
+
+    // show context menu at touch coords on long-press for own messages
     if(messageData.name === (localStorage.getItem('nick')||nick)){
-      // show context menu at touch coords on long-press
       longPressTimer = setTimeout(()=> {
-        // position at the touch point
         showEditDeleteMenu(Math.round(touchStartX - 80), Math.round(touchStartY + 6), msgId, messageData.text);
       }, 650);
     }
-    dragging = false;
-    // ensure any previous transforms cleared
-    const a = avatarEl(); if(a) a.style.transform = '';
-    const m = moreBtnEl(); if(m) m.style.transform = '';
-    const r = replyBtnEl(); if(r) r.style.transform = '';
+
+    // clear any previous transition so movement is smooth
+    el.style.transition = 'none';
   }, {passive:true});
 
   el.addEventListener('touchmove', (e)=>{
     const t = e.touches[0];
     const dx = t.clientX - touchStartX;
     const dy = t.clientY - touchStartY;
+    // if vertical motion dominates, cancel
     if(Math.abs(dy) > Math.abs(dx)){
       if(longPressTimer) clearTimeout(longPressTimer);
       return;
     }
-    if(!dragging && Math.abs(dx) > 10){
-      dragging = true;
+    if(!draggingLocal && Math.abs(dx) > 10){
+      draggingLocal = true;
       if(longPressTimer) clearTimeout(longPressTimer);
     }
-    if(dragging){
+    if(draggingLocal){
       e.preventDefault();
-      const capped = Math.min(Math.max(dx, 0), 120);
-      // Move only non-text UI parts so the message text remains fixed on X-axis
-      const a = avatarEl(); if(a) { a.style.transform = `translateX(${capped}px)`; a.style.willChange = 'transform'; }
-      const m = moreBtnEl(); if(m) { m.style.transform = `translateX(${capped}px)`; m.style.willChange = 'transform'; }
-      const r = replyBtnEl(); if(r) { r.style.transform = `translateX(${capped}px)`; r.style.willChange = 'transform'; }
+      const capped = Math.min(Math.max(dx, 0), 160); // only allow right swipe, cap to 160px
+      // Move the entire message element
+      el.style.transform = `translateX(${capped}px)`;
+      el.style.willChange = 'transform';
 
+      // show preview once past small threshold
       if(capped > 36){
         const md = messageData;
         replyBox.style.display = 'block';
@@ -1113,26 +1118,20 @@ function attachMobileInteractions(el, msgId, messageData){
 
   el.addEventListener('touchend', ()=>{
     if(longPressTimer) clearTimeout(longPressTimer);
-    // compute px from transforms (we look at avatar transform as representative)
-    const a = avatarEl();
+    // determine px moved from transform
     let px = 0;
-    if(a && a.style.transform){
-      const m = a.style.transform.match(/translateX\((-?\d+(\.\d+)?)px\)/);
+    const tr = el.style.transform;
+    if(tr){
+      const m = tr.match(/translateX\((-?\d+(\.\d+)?)px\)/);
       px = m ? parseInt(m[1],10) : 0;
     }
     // reset transforms with smooth transition
-    const reset = (node) => {
-      if(!node) return;
-      node.style.transition = 'transform 180ms ease';
-      node.style.transform = '';
-      setTimeout(()=>{ node.style.transition = ''; node.style.willChange = ''; }, 200);
-    };
-    reset(avatarEl());
-    reset(moreBtnEl());
-    reset(replyBtnEl());
+    el.style.transition = 'transform 180ms ease';
+    el.style.transform = '';
+    setTimeout(()=>{ el.style.transition = ''; el.style.willChange = ''; }, 200);
 
     if(px > 60){
-      // user completed swipe -> open reply UI (keep text unmoved)
+      // completed swipe -> trigger reply UI
       setTimeout(()=>{
         replyTo = { name: messageData.name, text: messageData.text };
         replyBox.style.display = 'block';
