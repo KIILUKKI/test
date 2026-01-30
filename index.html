@@ -140,8 +140,26 @@
 /* typing indicator (between chat and input) */
 #typingIndicator{padding:6px 12px;color:var(--muted);font-size:13px;min-height:18px;display:none}
 
-/* reply box is positioned above the input bar to avoid layout jumps */
-#replyBox{display:none;background:var(--card);padding:8px 14px;font-size:13px;color:var(--text);position:absolute;left:12px;right:12px;bottom:72px;border-radius:10px;z-index:85;box-shadow:0 6px 18px rgba(0,0,0,0.5)}
+/* reply box: fixed so it never becomes part of message flow */
+#replyBox{
+  display:none;
+  position:fixed;
+  left:50%;
+  transform:translateX(-50%);
+  bottom:86px;
+  width:calc(100% - 36px);
+  max-width:920px;
+  background:var(--card);
+  padding:8px 14px;
+  font-size:13px;
+  color:var(--text);
+  border-radius:10px;
+  z-index:999;
+  box-shadow:0 8px 26px rgba(0,0,0,0.45);
+  box-sizing:border-box;
+}
+
+/* input bar */
 #inputBar{padding:12px;background:var(--panel);border-top:1px solid #0d1117;display:flex;gap:8px;align-items:center;position:relative;z-index:80}
 #msg{flex:1;padding:12px;border-radius:10px;border:none;background:var(--card);color:var(--text)}
 #emojiPicker{display:none;flex-wrap:wrap;gap:6px;padding:8px;background:var(--card);border-radius:8px;position:absolute;bottom:72px;left:12px;max-width:320px;max-height:300px;overflow:auto}
@@ -383,11 +401,10 @@
 
 <script type="module">
 /* ===================
-   Minimal, targeted changes applied for mobile swipe behavior:
-   - On mobile, the whole .message element translates X on swipe (not only avatar/buttons).
-   - On mobile we DO NOT render the reply button nor the three-dots button.
-   - Long-press for edit/delete is preserved (for own messages).
-   - Added global edge-swipe handlers so left-edge swipe opens the sidebar in any view.
+   Minimal, targeted changes applied for mobile swipe behavior and fixed reply box:
+   - replyBox is fixed (prevents per-line duplication / layout shifting).
+   - attachMobileInteractions uses a guard to show reply preview only once per swipe.
+   - Global edge-swipe handlers open the sidebar from the left edge in any view.
    Everything else left intact.
    =================== */
 
@@ -1093,17 +1110,20 @@ function hideContextMenu(){
 /* mobile interactions: long-press -> edit/delete for own; smooth swipe right -> reply
    CHANGE: Move the ENTIRE .message element on mobile swipe (so the whole message translates).
    Long-press still opens Edit/Delete for own messages.
+   Guard 'replyPreviewShownFor' prevents multiple reply previews showing per-swipe.
 */
 function attachMobileInteractions(el, msgId, messageData){
   let longPressTimer = null;
   let touchStartX = 0;
   let touchStartY = 0;
   let draggingLocal = false;
+  let replyPreviewShownFor = false; // guard to avoid multiple previews
 
   el.addEventListener('touchstart', (e)=>{
     const t = e.touches[0];
     touchStartX = t.clientX; touchStartY = t.clientY;
     draggingLocal = false;
+    replyPreviewShownFor = false;
 
     // show context menu at touch coords on long-press for own messages
     if(messageData.name === (localStorage.getItem('nick')||nick)){
@@ -1136,14 +1156,18 @@ function attachMobileInteractions(el, msgId, messageData){
       el.style.transform = `translateX(${capped}px)`;
       el.style.willChange = 'transform';
 
-      // show preview once past small threshold
-      if(capped > 36){
-        const md = messageData;
+      // show preview ONCE when threshold crossed
+      if(capped > 36 && !replyPreviewShownFor){
+        replyPreviewShownFor = true;
+        replyTo = { name: messageData.name, text: messageData.text }; // prepare reply
         replyBox.style.display = 'block';
-        replyBox.innerHTML = `Replying to <b>${escapeHtml(md.name)}</b> <button id="cancelReply" style="margin-left:8px">x</button>`;
+        replyBox.innerHTML = `Replying to <b>${escapeHtml(replyTo.name)}</b> <button id="cancelReply" style="margin-left:8px">x</button>`;
         const btn = document.getElementById('cancelReply'); if(btn) btn.onclick = cancelReply;
-      } else if(capped <= 36) {
-        if(!replyTo) replyBox.style.display = 'none';
+      } else if(capped <= 36 && replyPreviewShownFor){
+        // if user drags back under threshold, hide preview and reset guard
+        replyPreviewShownFor = false;
+        replyTo = null;
+        replyBox.style.display = 'none';
       }
     }
   }, {passive:false});
@@ -1163,15 +1187,16 @@ function attachMobileInteractions(el, msgId, messageData){
     setTimeout(()=>{ el.style.transition = ''; el.style.willChange = ''; }, 200);
 
     if(px > 60){
-      // completed swipe -> trigger reply UI
-      setTimeout(()=>{
-        replyTo = { name: messageData.name, text: messageData.text };
-        replyBox.style.display = 'block';
-        replyBox.innerHTML = `Replying to <b>${escapeHtml(replyTo.name)}</b> <button id="cancelReply" style="margin-left:8px">x</button>`;
-        const btn = document.getElementById('cancelReply'); if(btn) btn.onclick = cancelReply;
-      }, 160);
+      // completed swipe -> finalise reply (replyBox already shown due to guard)
+      replyTo = replyTo || { name: messageData.name, text: messageData.text };
+      replyBox.style.display = 'block';
+      replyBox.innerHTML = `Replying to <b>${escapeHtml(replyTo.name)}</b> <button id="cancelReply" style="margin-left:8px">x</button>`;
+      const btn = document.getElementById('cancelReply'); if(btn) btn.onclick = cancelReply;
     } else {
-      setTimeout(()=>{ if(!replyTo) replyBox.style.display = 'none'; }, 160);
+      // cancelled, ensure hidden
+      replyTo = null;
+      replyBox.style.display = 'none';
+      replyPreviewShownFor = false;
     }
   });
 }
