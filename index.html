@@ -664,7 +664,7 @@ nickColorCircle.addEventListener('click', ()=> {
   if(nickColorInput.disabled) return;
   nickColorInput.click();
 });
-nickColorInput.addEventListener('input', async ()=>{
+nickColorInput.addEventListener('input', async ()=>{ 
   nickColorCircle.style.background = nickColorInput.value;
   localStorage.setItem('nickColor', nickColorInput.value);
   // update Firestore users doc if logged in
@@ -1091,7 +1091,7 @@ function attachMobileInteractions(el, msgId, messageData){
     const a = avatarEl();
     let px = 0;
     if(a && a.style.transform){
-      const m = a.style.transform.match(/translateX\((-?\d+(\.\d+)?)px\)/);
+      const m = a.style.transform.match(/translateX\((-?\\d+(\.\d+)?)px\)/);
       px = m ? parseInt(m[1],10) : 0;
     }
     // reset transforms with smooth transition
