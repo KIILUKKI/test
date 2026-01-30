@@ -387,6 +387,7 @@
    - On mobile, the whole .message element translates X on swipe (not only avatar/buttons).
    - On mobile we DO NOT render the reply button nor the three-dots button.
    - Long-press for edit/delete is preserved (for own messages).
+   - Added global edge-swipe handlers so left-edge swipe opens the sidebar in any view.
    Everything else left intact.
    =================== */
 
@@ -501,6 +502,37 @@ function enforceDesktopLobby(){
   }
 }
 enforceDesktopLobby();
+
+/* === NEW: Global edge-swipe handlers to open sidebar from left edge (works in any view) ===
+   - activates only on mobile
+   - only when touch starts near the very left edge (threshold 24px)
+   - triggers openMobileDrawer() once user swipes right > 60px
+*/
+let edgeSwipeStartX = 0;
+let edgeSwipeActive = false;
+
+document.addEventListener('touchstart', (e) => {
+  if(!isMobile) return;
+  const t = e.touches[0];
+  edgeSwipeStartX = t.clientX;
+  // activate only when starting very near left edge and drawer not already open
+  edgeSwipeActive = (edgeSwipeStartX < 24) && !mobileDrawer.classList.contains('show') && !mobileOverlay.classList.contains('show');
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+  if(!edgeSwipeActive) return;
+  const t = e.touches[0];
+  const deltaX = t.clientX - edgeSwipeStartX;
+  if(deltaX > 60){
+    // open drawer and disable this edge-swipe until next touchstart
+    openMobileDrawer();
+    edgeSwipeActive = false;
+  }
+}, { passive: true });
+
+document.addEventListener('touchend', () => {
+  edgeSwipeActive = false;
+});
 
 /* Session helpers */
 function showHome(){
