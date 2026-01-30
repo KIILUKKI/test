@@ -167,7 +167,7 @@
   color: var(--accent);
 }
 #emojiBtn:active{transform:scale(0.98)}
-.emoji-icon{font-size:18px;line-height:1;transform:translateY(1px);} 
+.emoji-icon{font-size:18px;line-height:1;transform:translateY(1px);}
 
 /* MORE (three-dots) button next to reply — positioned at the far right (z-axis on top) */
 .more-btn{position:absolute;right:12px;top:8px;font-size:16px;color:var(--muted);cursor:pointer;opacity:0;padding:4px;border-radius:6px;z-index:12;transform:none}
@@ -387,6 +387,7 @@
    - Buttons at top-right grouped in #topRightControls to avoid overlapping.
    - Fullscreen button made slightly larger visually.
    - Menu panels (howMenu, settingsMenu, profileCard) aligned to right:12px so they appear under the container.
+   - Added a real-time rooms listener (setupRoomsListener) so rooms show up immediately.
    - No other feature changes.
    =================== */
 
@@ -474,6 +475,7 @@ let lastMessageTime = 0;
 let typingTimeout = null;
 let messagesUnsub = null;
 let typingUnsub = null;
+let roomsUnsub = null; // <--- listener for rooms collection
 
 /* cache for user docs to avoid repeated reads */
 const userCache = new Map();
@@ -695,6 +697,29 @@ function renderRoomEntry(id){
   createEl(roomList);
   createEl(roomListSidebar);
   createEl(roomListMobile);
+}
+
+/* NEW: real-time rooms listener so rooms appear immediately */
+function setupRoomsListener(){
+  if(roomsUnsub) roomsUnsub();
+  try{
+    const roomsCol = collection(db,'rooms');
+    roomsUnsub = onSnapshot(roomsCol, snap => {
+      roomList.innerHTML = '';
+      roomListSidebar.innerHTML = '';
+      roomListMobile.innerHTML = '';
+      snap.forEach(docSnap => {
+        renderRoomEntry(docSnap.id);
+      });
+    }, err => {
+      console.error('rooms listener error', err);
+      // fallback to one-time load if realtime fails
+      loadRooms().catch(()=>{});
+    });
+  }catch(e){
+    console.error('setupRoomsListener error', e);
+    loadRooms().catch(()=>{});
+  }
 }
 
 /* create/join handlers */
@@ -1091,7 +1116,7 @@ function attachMobileInteractions(el, msgId, messageData){
     const a = avatarEl();
     let px = 0;
     if(a && a.style.transform){
-      const m = a.style.transform.match(/translateX\((-?\\d+(\\.\\d+)?)px\)/);
+      const m = a.style.transform.match(/translateX\((-?\d+(\.\d+)?)px\)/);
       px = m ? parseInt(m[1],10) : 0;
     }
     // reset transforms with smooth transition
@@ -1467,7 +1492,7 @@ document.addEventListener('touchstart', (e)=>{
 /* utility helpers */
 function escapeHtml(s){
   if(!s && s !== 0) return '';
-  return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<'':'&lt;','>'':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
+  return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
 }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
@@ -1558,6 +1583,9 @@ demoBtn.addEventListener('click', (e) => {
   nickColorCircle.style.background = guestColor;
   showHome();
 });
+
+/* Ensure rooms are loaded (real-time) */
+setupRoomsListener();
 
 /* =========================
    End of file
