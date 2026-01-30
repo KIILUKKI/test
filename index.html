@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fi">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
@@ -137,8 +137,57 @@
 /* edited note */
 .edited-note{font-size:12px;color:var(--muted);margin-left:8px;display:inline-block}
 
-/* typing indicator (between chat and input) */
-#typingIndicator{padding:6px 12px;color:var(--muted);font-size:13px;min-height:18px;display:none}
+/* typing indicator: new stylish component */
+#typingIndicator{
+  display:none;
+  position:relative;
+  padding:8px 12px;
+  margin:0 12px 8px 12px;
+  border-radius:12px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.015), rgba(255,255,255,0.01));
+  border: 1px solid rgba(255,255,255,0.02);
+  color:var(--muted);
+  font-size:13px;
+  align-items:center;
+  gap:10px;
+  z-index:90;
+  transition:opacity 180ms ease, transform 180ms ease;
+  display:flex;
+  align-items:center;
+}
+
+/* avatars stack inside typing indicator */
+.typing-avatars{display:flex;gap:6px;align-items:center}
+.typing-avatars .typ-av{
+  width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000;border:2px solid rgba(255,255,255,0.04);font-size:12px;background:var(--guest-gray);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+
+/* text & animated dots */
+.typing-text{display:flex;flex-direction:row;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+.typing-dots{display:inline-flex;gap:6px;align-items:flex-end;height:14px}
+.typing-dots span{
+  width:6px;height:6px;border-radius:50%;display:inline-block;background:var(--muted);opacity:0.45;
+  transform: translateY(0);
+  animation: typing-bounce 1s infinite;
+}
+.typing-dots span:nth-child(1){animation-delay:0s}
+.typing-dots span:nth-child(2){animation-delay:0.12s}
+.typing-dots span:nth-child(3){animation-delay:0.24s}
+
+@keyframes typing-bounce{
+  0% { transform: translateY(0); opacity:0.45; }
+  40% { transform: translateY(-6px); opacity:1; }
+  80% { transform: translateY(0); opacity:0.45; }
+  100% { transform: translateY(0); opacity:0.45; }
+}
+
+/* smaller on tiny screens */
+@media (max-width:480px){
+  .typing-avatars .typ-av{ width:24px;height:24px;font-size:11px }
+  #typingIndicator{ margin:0 10px 8px 10px; padding:8px; border-radius:10px }
+  #replyBox { bottom:72px; width:calc(100% - 24px) }
+}
 
 /* reply box: fixed so it never becomes part of message flow */
 #replyBox{
@@ -401,10 +450,8 @@
 
 <script type="module">
 /* ===================
-   Minimal, targeted changes applied for mobile swipe behavior and fixed reply box:
-   - replyBox is fixed (prevents per-line duplication / layout shifting).
-   - attachMobileInteractions uses a guard to show reply preview only once per swipe.
-   - Global edge-swipe handlers open the sidebar from the left edge in any view.
+   Minimal, targeted changes applied for mobile swipe behavior and fixed reply box,
+   plus a stylish typing indicator (avatars + animated dots).
    Everything else left intact.
    =================== */
 
@@ -866,19 +913,44 @@ async function enterRoom(r){
       else if(tField && typeof tField._seconds === 'number') tMs = (tField._seconds*1000) + (tField._nanoseconds ? Math.floor(tField._nanoseconds/1e6) : 0);
       if(tMs && (now - tMs) < 4000) usersTyping.push(d.id);
     });
-    if(usersTyping.length){
-      // English typing indicator
-      let txt = '';
-      if(usersTyping.length === 1) txt = `${usersTyping[0]} is typing...`;
-      else if(usersTyping.length === 2) txt = `${usersTyping[0]} and ${usersTyping[1]} are typing...`;
-      else txt = `${usersTyping.slice(0,3).join(', ')} and others are typing...`;
-      typingIndicator.textContent = txt;
-      typingIndicator.style.display = 'block';
-    } else {
-      typingIndicator.textContent = '';
-      typingIndicator.style.display = 'none';
-    }
+
+    // render stylish indicator
+    renderTypingIndicator(usersTyping);
   });
+}
+
+/* renderTypingIndicator: shows avatars + animated dots + text (up to 4 users)
+   Uses userCache for colors where possible; falls back to guest gray.
+*/
+function renderTypingIndicator(usersTyping){
+  if(!usersTyping || usersTyping.length === 0){
+    typingIndicator.style.display = 'none';
+    typingIndicator.innerHTML = '';
+    return;
+  }
+  // limit to first 4 avatars
+  const showAvs = usersTyping.slice(0,4);
+  const avatarsHtml = showAvs.map(n => {
+    const color = (userCache.get(n) && userCache.get(n).color) ? userCache.get(n).color : getComputedStyle(document.documentElement).getPropertyValue('--guest-gray').trim();
+    return `<div class="typ-av" style="background:${color}">${escapeHtml((n||'?')[0]||'?')}</div>`;
+  }).join('');
+  // text
+  let txt = '';
+  if(usersTyping.length === 1) txt = `${escapeHtml(usersTyping[0])} kirjoittaa`;
+  else if(usersTyping.length === 2) txt = `${escapeHtml(usersTyping[0])} ja ${escapeHtml(usersTyping[1])} kirjoittavat`;
+  else if(usersTyping.length === 3) txt = `${escapeHtml(usersTyping[0])}, ${escapeHtml(usersTyping[1])} ja ${escapeHtml(usersTyping[2])} kirjoittavat`;
+  else txt = `${escapeHtml(usersTyping[0])}, ${escapeHtml(usersTyping[1])} ja ${usersTyping.length-2} muuta kirjoittavat`;
+
+  typingIndicator.innerHTML = `
+    <div class="typing-avatars">
+      ${avatarsHtml}
+    </div>
+    <div class="typing-text">
+      <div class="typing-label">${txt}</div>
+      <div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+    </div>
+  `;
+  typingIndicator.style.display = 'flex';
 }
 
 /* DOM helpers for incremental updates */
@@ -1201,7 +1273,7 @@ function attachMobileInteractions(el, msgId, messageData){
   });
 }
 
-/* typing indicator management */
+/* typing indicator management (client writes typing docs elsewhere) */
 msg.addEventListener('input', ()=> {
   if(!room || !nick) return;
   if(msg.value.trim()===''){
@@ -1563,18 +1635,6 @@ function endDrag(){
   mobileDrawer.style.willChange = '';
 }
 
-/* touch handlers for drag (unchanged) */
-document.addEventListener('touchstart', (e)=>{
-  if(!isMobile) return;
-  const t = e.touches[0];
-  touchStartX = t.clientX;
-  touchStartY = t.clientY;
-  touchStarted = true;
-  touchPotentialDrag = false;
-
-  // ... rest of touch handling omitted for brevity (unchanged)
-});
-
 /* utility helpers */
 function escapeHtml(s){
   if(!s && s !== 0) return '';
@@ -1589,6 +1649,13 @@ function linkify(text){
     if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
     return `<a href="${url}" target="_blank" rel="noopener">${match}</a>`;
   });
+}
+
+/* helper to get user color from cache or default */
+function getUserColor(name){
+  const cached = userCache.get(name);
+  if(cached && cached.color) return cached.color;
+  return getComputedStyle(document.documentElement).getPropertyValue('--guest-gray').trim();
 }
 
 /* =========================
