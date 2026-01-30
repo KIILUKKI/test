@@ -450,8 +450,9 @@
 
 <script type="module">
 /* ===================
-   Minimal, targeted changes applied for mobile swipe behavior and fixed reply box,
-   plus a stylish typing indicator (avatars + animated dots).
+   Minimal, targeted changes applied for:
+   - mobile swipe behavior and fixed reply box,
+   - stylish typing indicator with controlled animation restart logic
    Everything else left intact.
    =================== */
 
@@ -914,26 +915,42 @@ async function enterRoom(r){
       if(tMs && (now - tMs) < 4000) usersTyping.push(d.id);
     });
 
-    // render stylish indicator
+    // render stylish indicator (with controlled animation restarts)
     renderTypingIndicator(usersTyping);
   });
 }
 
+/* --- Animation restart control vars:
+   We avoid restarting the dot animation on every typing heartbeat (otherwise it's too snappy).
+   Restart only when the set of users changes OR if enough time has passed since last restart.
+*/
+let _lastTypingKey = '';
+let _lastTypingAnimRestart = 0;
+const TYPING_ANIM_MIN_RESTART_INTERVAL = 1200; // ms; don't restart animation more often than this unless users changed
+
 /* renderTypingIndicator: shows avatars + animated dots + text (up to 4 users)
    Uses userCache for colors where possible; falls back to guest gray.
+   Animation will be restarted only when users list changes OR minimum interval elapsed.
 */
 function renderTypingIndicator(usersTyping){
   if(!usersTyping || usersTyping.length === 0){
     typingIndicator.style.display = 'none';
     typingIndicator.innerHTML = '';
+    _lastTypingKey = '';
     return;
   }
+
+  // build key (order-stable)
+  const sorted = [...usersTyping].sort();
+  const key = sorted.join(',');
+
   // limit to first 4 avatars
   const showAvs = usersTyping.slice(0,4);
   const avatarsHtml = showAvs.map(n => {
     const color = (userCache.get(n) && userCache.get(n).color) ? userCache.get(n).color : getComputedStyle(document.documentElement).getPropertyValue('--guest-gray').trim();
     return `<div class="typ-av" style="background:${color}">${escapeHtml((n||'?')[0]||'?')}</div>`;
   }).join('');
+
   // text
   let txt = '';
   if(usersTyping.length === 1) txt = `${escapeHtml(usersTyping[0])} kirjoittaa`;
@@ -941,6 +958,7 @@ function renderTypingIndicator(usersTyping){
   else if(usersTyping.length === 3) txt = `${escapeHtml(usersTyping[0])}, ${escapeHtml(usersTyping[1])} ja ${escapeHtml(usersTyping[2])} kirjoittavat`;
   else txt = `${escapeHtml(usersTyping[0])}, ${escapeHtml(usersTyping[1])} ja ${usersTyping.length-2} muuta kirjoittavat`;
 
+  // set HTML
   typingIndicator.innerHTML = `
     <div class="typing-avatars">
       ${avatarsHtml}
@@ -951,6 +969,24 @@ function renderTypingIndicator(usersTyping){
     </div>
   `;
   typingIndicator.style.display = 'flex';
+
+  // Decide whether to restart the dot animation.
+  // Restart if users changed (key different) OR if enough time passed since last restart (to keep it fresh occasionally).
+  const now = Date.now();
+  const needRestart = (key !== _lastTypingKey) || (now - _lastTypingAnimRestart > TYPING_ANIM_MIN_RESTART_INTERVAL);
+
+  if(needRestart){
+    // restart by cloning the dots node (clean restart of CSS animations)
+    const dots = typingIndicator.querySelector('.typing-dots');
+    if(dots && dots.parentNode){
+      const clone = dots.cloneNode(true);
+      // small microtask delay ensures DOM update and avoids jank
+      dots.parentNode.replaceChild(clone, dots);
+      _lastTypingAnimRestart = now;
+    }
+  }
+
+  _lastTypingKey = key;
 }
 
 /* DOM helpers for incremental updates */
