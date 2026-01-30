@@ -167,7 +167,7 @@
   color: var(--accent);
 }
 #emojiBtn:active{transform:scale(0.98)}
-.emoji-icon{font-size:18px;line-height:1;transform:translateY(1px);}
+.emoji-icon{font-size:18px;line-height:1;transform:translateY(1px);} 
 
 /* MORE (three-dots) button next to reply — positioned at the far right (z-axis on top) */
 .more-btn{position:absolute;right:12px;top:8px;font-size:16px;color:var(--muted);cursor:pointer;opacity:0;padding:4px;border-radius:6px;z-index:12;transform:none}
@@ -1091,7 +1091,7 @@ function attachMobileInteractions(el, msgId, messageData){
     const a = avatarEl();
     let px = 0;
     if(a && a.style.transform){
-      const m = a.style.transform.match(/translateX\((-?\\d+(\.\d+)?)px\)/);
+      const m = a.style.transform.match(/translateX\((-?\\d+(\\.\\d+)?)px\)/);
       px = m ? parseInt(m[1],10) : 0;
     }
     // reset transforms with smooth transition
@@ -1467,7 +1467,7 @@ document.addEventListener('touchstart', (e)=>{
 /* utility helpers */
 function escapeHtml(s){
   if(!s && s !== 0) return '';
-  return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
+  return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<'':'&lt;','>'':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
 }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
