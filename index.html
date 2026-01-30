@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8">
+  <title>Chat Login Test</title>
+  <style>
+    body {
+      font-family: system-ui, Arial;
+      background: #0b0f14;
+      color: #e6edf3;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #161b22;
+      padding: 20px;
+      border-radius: 8px;
+      width: 360px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.6);
+    }
+    h3 { margin-top: 0; }
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 8px 0;
+      border-radius: 6px;
+      border: none;
+      background: #21262d;
+      color: #e6edf3;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      border-radius: 6px;
+      border: none;
+      background: #58a6ff;
+      color: #000;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .msg {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #8b949e;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h3>Login / Register (test)</h3>
+  <input id="username" placeholder="Käyttäjänimi">
+  <input id="password" type="password" placeholder="Salasana">
+  <button id="loginBtn">Kirjaudu / Rekisteröidy</button>
+  <div id="msg" class="msg"></div>
+</div>
+
+<script type="module">
+  // Firebase SDK
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+  // 🔥 SUN FIRESTORE CONFIG (kopioitu pääkoodista)
+  const firebaseConfig = {
+    apiKey: "AIzaSyDbYLUXJjHQ-V5uFvtyzwq-IwIKM7xTcyc",
+    projectId: "chat-fc8ef"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  const userEl = document.getElementById("username");
+  const passEl = document.getElementById("password");
+  const msgEl  = document.getElementById("msg");
+  const btn    = document.getElementById("loginBtn");
+
+  // SHA-256 hash
+  async function sha256(text) {
+    const data = new TextEncoder().encode(text);
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(hash)]
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  btn.onclick = async () => {
+    const username = userEl.value.trim();
+    const password = passEl.value;
+
+    if (!username || !password) {
+      msgEl.textContent = "Täytä käyttäjänimi ja salasana.";
+      return;
+    }
+
+    msgEl.textContent = "Tarkistetaan...";
+
+    try {
+      const userRef = doc(db, "users", username);
+      const snap = await getDoc(userRef);
+      const passHash = await sha256(password);
+
+      if (!snap.exists()) {
+        // REGISTER
+        await setDoc(userRef, {
+          passwordHash: passHash,
+          created: serverTimestamp(),
+          color: "#58a6ff"
+        });
+
+        localStorage.setItem("session", username);
+        localStorage.setItem("nick", username);
+        localStorage.setItem("nickColor", "#58a6ff");
+
+        msgEl.textContent = "Rekisteröity ja kirjautunut 👍";
+        return;
+      }
+
+      // LOGIN
+      const data = snap.data();
+      if (data.passwordHash === passHash) {
+        localStorage.setItem("session", username);
+        localStorage.setItem("nick", username);
+        if (data.color) localStorage.setItem("nickColor", data.color);
+
+        msgEl.textContent = "Kirjautuminen onnistui ✅";
+      } else {
+        msgEl.textContent = "Väärä salasana ❌";
+      }
+
+    } catch (err) {
+      console.error(err);
+      msgEl.textContent = "Virhe: " + err.message;
+    }
+  };
+
+  passEl.addEventListener("keydown", e => {
+    if (e.key === "Enter") btn.click();
+  });
+</script>
+
+</body>
+</html>
